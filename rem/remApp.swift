@@ -14,6 +14,8 @@ import CoreGraphics
 import ScriptingBridge
 import os
 
+import Tokenizers
+
 final class MainWindow: NSWindow {
     override var canBecomeKey: Bool {
         return true
@@ -84,9 +86,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private var isCapturing: CaptureState = .stopped
     private let screenshotQueue = DispatchQueue(label: "today.jason.screenshotQueue")
+    
+    private var embeddingModel: float32_model?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let _ = DatabaseManager.shared
+      
+        do {
+            embeddingModel = try float32_model()
+        } catch {
+            fatalError("Failed to load gte-small embedding model")
+        }
 
         // Initialize the popover
         popover = NSPopover()
@@ -162,6 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Initialize the search view
         searchView = SearchView(onThumbnailClick: openFullView)
+        
     }
     
     func setupMenu() {
@@ -195,6 +206,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem(title: "Quit", action: #selector(self.quitApp), keyEquivalent: "q"))
             self.statusBarItem.menu = menu
         }
+        
     }
     
     @objc func showMeMyData() {
@@ -279,7 +291,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch {
             logger.error("Error starting screen capture: \(error.localizedDescription)")
+        }                
+        // abusing some existing concurrency why not?
+                           
+        // load config to determine tokenizer; config _is_ loaded from huggingface
+        do {
+            let tokenizer = try await AutoTokenizer.from(pretrained: "thenlper/gte-small")
+            let inputIds: [Int] = tokenizer("Today she took a train to the West")
+            
+            logger.info("tokens: \(inputIds)")
+            
+            let mlArray = try MLMultiArray(shape: [ NSNumber(value: 1), NSNumber(value: 128) ], dataType: MLMultiArrayDataType.int32)
+            for (i, value) in inputIds.enumerated() {
+                mlArray[[0,i] as [NSNumber]] = NSNumber(value: value)
+            }
+            
+            let attention_mask = try MLMultiArray(shape: [ NSNumber(value: 1), NSNumber(value: 128) ], dataType: MLMultiArrayDataType.int32)
+            for i in 0..<inputIds.count {
+                attention_mask[[0,i] as [NSNumber]] = NSNumber(value: i)
+            }
+            
+            let input = float32_modelInput(input_ids: mlArray, attention_mask: attention_mask)
+            let output = try await embeddingModel?.prediction(input: input)
+           
+            let hiddenState = output!.pooler_output
+            let row = 0
+//            for i in 0..<384 {
+//                print("0,127,\(i): \(hiddenState[[row, 1, i] as [NSNumber]])")
+//            }
+            for i in 0..<hiddenState.count {
+                print("\(hiddenState[i])")
+            }
+            //let hiddenState: MLShapedArray<Float>? = output?.last_hidden_stateShapedArray
+            
+        } catch {
+            logger.error("Error loading tokenizer: \(error.localizedDescription)")
+            
         }
+                
+
     }
     
     @objc private func copyRecentContext() {
@@ -293,9 +343,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         Task {
             guard let display = shareableContent.displays.first else { return }
+<<<<<<< Updated upstream
             let activeApplicationName = NSWorkspace.shared.frontmostApplication?.localizedName
 
             logger.debug("Active Application: \(activeApplicationName ?? "<undefined>")")
+=======
+        
+
+            let window = shareableContent.windows.first { $0.isActive }
+            let activeApplication = window?.owningApplication
+            let activeApplicationName = activeApplication?.applicationName
+           
+            // let nsWindow = NSApplication.shared.keyWindow
+                
+            
+//            shareableContent.applications.forEach() {
+//                if $0.isActive && $0.isOnScreen {
+//                    print("Capturing active window: \($0.owningApplication?.applicationName): \($0.windowLayer)")
+//                }
+//            }
+            
+            let contentFilter = SCContentFilter(display: display, excludingWindows:[SCWindow]())
+            //let contentFilter = SCContentFilter(display: display, including: [activeApplication!], exceptingWindows: [])
+            //let contentFilter = SCContentFilter(desktopIndependentWindow: window!)
+            
+            let streamConf = SCStreamConfiguration()
+            streamConf.sourceRect = window!.frame
+            //streamConf.width = Int(window!.frame.width) * 2
+            //streamConf.height = Int(window!.frame.height) * 2
+            
+            
+            let image1 = try await SCScreenshotManager.captureImage(contentFilter: contentFilter, configuration: streamConf)
+            
+>>>>>>> Stashed changes
             
             // Do we want to record the timeline being searched?
             guard let image = CGDisplayCreateImage(display.displayID, rect: display.frame) else { return }
